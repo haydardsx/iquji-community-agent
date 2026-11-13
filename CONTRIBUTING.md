@@ -7,6 +7,7 @@
 提交前运行：
 
 ```sh
+python3 -m unittest discover -s scripts -p 'test_*.py'
 cargo fmt -- --check
 cargo fmt --manifest-path protocol/Cargo.toml -- --check
 cargo test --locked

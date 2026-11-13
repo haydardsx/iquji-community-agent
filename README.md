@@ -127,6 +127,10 @@ cargo run --locked -- --config "$PWD/.local/config.json" inspect local-deepseek 
 
 ## 发布
 
-两个 crate 统一使用 `0.1.0` 等版本，`v` 前缀标签必须与版本一致。维护者首次登录 crates.io 并验证邮箱后发布；后续为两个 crate 配置可信发布，仓库为 `haydardsx/iquji-community-agent`、工作流为 `release.yml`、环境为 `crates-io`。工作流先完成 workspace 格式、测试、Clippy 和打包，再按 wire、agent 顺序发布；已存在版本不覆盖，重跑继续未发布的 crate。
+`main` 更新后由 `auto-release.yml` 自动规划发布，也可手动运行该工作流重试。规划器串行处理未完成的自动标签，再读取最新 `main`，不会回放较旧的主线提交。同一源码只分配一个版本；新版本取源码稳定版本、既有稳定标签和两个 crate 注册表版本中的最大值递增 patch。源码中的版本保留开发基线，版本变更只写入以该源码为父提交的独立快照，统一更新两个 crate、内部依赖及两个锁文件，不回写 `main`。
+
+快照通过格式、测试、Clippy 和制品检查后才创建不可变 `v` 标签，注释中的 `Auto-Release-Source` 记录源码提交。规划器显式调度 `release.yml` 并等待完成，避免 GitHub 自动令牌创建的标签不触发新工作流。维护者为两个 crate 配置可信发布：仓库 `haydardsx/iquji-community-agent`、工作流 `release.yml`、环境 `crates-io`，该环境只允许 `v*` 标签。
+
+发布工作流完成双系统检查，预热构建与打包后才领取短期 OIDC 授权，按 wire、agent 顺序发布。已有版本只在内容摘要完全一致时跳过；两个 crate 均能从 crates.io 读取且摘要匹配后，才创建 GitHub Release 作为完成标记。失败时保留标签，下次规划继续同一版本，不移动标签或覆盖已发布制品。GitHub Release 的 latest 标记不会因重试旧版本而倒退。
 
 `cargo package --workspace --locked` 同时校验两个待发布 crate，制品仅包含正式源码、说明、配置示例与许可，不包含测试夹具、工作区本机配置或构建产物。测试夹具保持 `publish = false`。当前不单独发行预编译二进制。

@@ -8,9 +8,12 @@ import re
 import subprocess
 import sys
 import tarfile
+import time
 import tomllib
 import urllib.error
 import urllib.request
+
+from release_version import package_version
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = [ROOT / "protocol", ROOT]
@@ -34,12 +37,27 @@ def registry_version(name, version):
         raise
 
 
+def verify_published(name, version, checksum, timeout=180):
+    deadline = time.monotonic() + timeout
+    while True:
+        published = registry_version(name, version)
+        if published:
+            if published["checksum"] != checksum:
+                raise RuntimeError(f"{name}@{version} 已存在但内容不同，请发布新版本。")
+            return
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"尚不能从 crates.io 读取 {name}@{version}，保留版本供后续重试。")
+        time.sleep(10)
+
+
 def main():
     dry_run = "--dry-run" in sys.argv
     run("git", "diff", "--exit-code")
     run("git", "diff", "--cached", "--exit-code")
+    package_version(ROOT)
     run("cargo", "package", "--workspace", "--locked")
     releases = []
+    artifacts = []
     for directory in PACKAGES:
         package = tomllib.loads((directory / "Cargo.toml").read_text())["package"]
         name, version = package["name"], package["version"]
@@ -64,6 +82,7 @@ def main():
             print(f"本地制品检查通过，尚未发布：{name}@{version}")
             continue
         checksum = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        artifacts.append((name, version, checksum))
         published = registry_version(name, version)
         if published:
             if published["checksum"] != checksum:
@@ -73,6 +92,8 @@ def main():
             releases.append((directory, name, version))
     for directory, name, version in releases:
         run("cargo", "publish", "--locked", "--manifest-path", str(directory / "Cargo.toml"))
+    for name, version, checksum in artifacts:
+        verify_published(name, version, checksum)
 
 
 if __name__ == "__main__":

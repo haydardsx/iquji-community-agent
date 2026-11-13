@@ -20,6 +20,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: 检查自动发布决策
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: 检查格式
         run: cargo fmt --all -- --check
       - name: 准备独立宿主的锁定依赖
