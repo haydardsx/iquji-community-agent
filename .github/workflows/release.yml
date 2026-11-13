@@ -27,6 +27,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: 在授权前完成冷构建与制品检查
+        run: python3 scripts/release.py --dry-run
       - name: 获取临时发布授权
         uses: rust-lang/crates-io-auth-action@v1
         id: auth
