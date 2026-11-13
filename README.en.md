@@ -182,7 +182,7 @@ Edit `.local/config.json` with the canonical paths to your installed Codex or De
 ```json
 {
   "schemaVersion": 1,
-  "workingDirectory": "/Users/yourname/workspace/my-project",
+  "workingDirectory": "/path/to/project",
   "timeoutMs": 5000,
   "maxOutputBytes": 32768,
   "agents": [

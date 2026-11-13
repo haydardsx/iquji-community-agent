@@ -142,19 +142,32 @@ fn acp_stdout_and_stderr_share_a_hard_byte_limit() {
 #[test]
 fn native_cancellation_and_timeout_reap_the_negotiating_process() {
     let fixture = fixture("native_acp", "hang");
+    let mut document = fixture.document();
+    document["agents"][0]["adapter"] = json!("native_acp");
+    document["timeoutMs"] = json!(5000);
+    fixture.save(document);
     let config = Configuration::load(&fixture.config).unwrap();
     let cancelled = Arc::new(AtomicBool::new(false));
     let signal = cancelled.clone();
-    let started = Instant::now();
+    let pid_file = fixture.root.join("request.pid");
     let thread = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(100));
+        // 等待协商进程写出身份后再取消，避免繁忙运行器在进程启动前收到信号。
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while !std::fs::read_to_string(&pid_file).is_ok_and(|pid| pid.parse::<i32>().is_ok()) {
+            assert!(Instant::now() < deadline, "协商进程未在期限内启动");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let signalled_at = Instant::now();
         signal.store(true, Ordering::SeqCst);
+        signalled_at
     });
     let report = serde_json::to_value(scan(&config, &cancelled)).unwrap();
-    thread.join().unwrap();
+    let signalled_at = thread.join().unwrap();
     assert_eq!(report["connections"][0]["error"], "probe_cancelled");
-    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(signalled_at.elapsed() < Duration::from_secs(2));
     assert_reaped(&fixture);
+    // 第二次探测必须记录新进程，不能复用已回收进程的身份通过断言。
+    std::fs::remove_file(fixture.root.join("request.pid")).unwrap();
     fixture.assert_error("probe_timed_out");
     assert_reaped(&fixture);
 }

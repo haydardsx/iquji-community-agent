@@ -182,7 +182,7 @@ chmod 600 .local/config.json
 ```json
 {
   "schemaVersion": 1,
-  "workingDirectory": "/Users/yourname/workspace/my-project",
+  "workingDirectory": "/path/to/project",
   "timeoutMs": 5000,
   "maxOutputBytes": 32768,
   "agents": [

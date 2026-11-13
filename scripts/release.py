@@ -71,9 +71,9 @@ def main():
                     continue
                 relative = member.name.split("/", 1)[1]
                 if not (relative.startswith("src/") or relative in {
-                    "Cargo.toml", "Cargo.toml.orig", "Cargo.lock", "README.md",
+                    "Cargo.toml", "Cargo.toml.orig", "Cargo.lock", "README.md", "README.en.md",
                     "LICENSE", "rust-toolchain.toml", "config.example.json", ".cargo_vcs_info.json",
-                } or (directory == ROOT and relative == "README.en.md")):
+                }):
                     raise RuntimeError(f"制品包含非发布文件：{relative}")
                 content = archive.extractfile(member).read().decode("utf-8", errors="replace")
                 if re.search(r"/(?:Users|home)/[A-Za-z0-9_.-]+/|[A-Z]:\\Users\\|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", content):

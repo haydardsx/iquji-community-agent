@@ -44,9 +44,10 @@ class PartialPublicationTests(unittest.TestCase):
             for name in ("iquji-agent-wire", "iquji-shared-agent"):
                 artifact = artifacts / f"{name}-{version}.crate"
                 with tarfile.open(artifact, "w:gz") as archive:
-                    info = tarfile.TarInfo(f"{name}-{version}/src/lib.rs")
-                    info.size = 0
-                    archive.addfile(info, io.BytesIO(b""))
+                    for filename in ("src/lib.rs", "README.md", "README.en.md"):
+                        info = tarfile.TarInfo(f"{name}-{version}/{filename}")
+                        info.size = 0
+                        archive.addfile(info, io.BytesIO(b""))
                 checksums[name] = hashlib.sha256(artifact.read_bytes()).hexdigest()
             published = {"iquji-agent-wire": checksums["iquji-agent-wire"]}
             commands = []
@@ -68,6 +69,34 @@ class PartialPublicationTests(unittest.TestCase):
                         commands.clear()
                         release.main()
                         self.assertFalse(any(item[:2] == ("cargo", "publish") for item in commands))
+
+
+class ArtifactBoundaryTests(unittest.TestCase):
+    def check_protocol_file(self, filename, content, expected_error):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "protocol").mkdir()
+            for name in ("Cargo.toml", "protocol/Cargo.toml"):
+                shutil.copyfile(release.ROOT / name, root / name)
+            version = release.package_version(root)
+            artifacts = root / "target/package"
+            artifacts.mkdir(parents=True)
+            with tarfile.open(artifacts / f"iquji-agent-wire-{version}.crate", "w:gz") as archive:
+                info = tarfile.TarInfo(f"iquji-agent-wire-{version}/{filename}")
+                info.size = len(content)
+                archive.addfile(info, io.BytesIO(content))
+            with patch.object(release, "ROOT", root), patch.object(release, "PACKAGES", [root / "protocol"]):
+                with patch.object(release, "run"), patch.object(release, "registry_version") as registry:
+                    with patch.object(release.sys, "argv", ["release.py", "--dry-run"]):
+                        with self.assertRaisesRegex(RuntimeError, expected_error):
+                            release.main()
+                    registry.assert_not_called()
+
+    def test_other_documentation_is_not_publishable(self):
+        self.check_protocol_file("resources/README.en.md", b"internal notes", "非发布文件")
+
+    def test_english_readme_keeps_privacy_checks(self):
+        self.check_protocol_file("README.en.md", b"/home/example/private-project", "本机信息")
 
 
 if __name__ == "__main__":
