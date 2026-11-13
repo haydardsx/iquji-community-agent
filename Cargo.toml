@@ -8,7 +8,7 @@ license = "MIT"
 description = "连接本机已授权 Agent 的 Rust 库与命令行工具。"
 repository = "https://github.com/haydardsx/iquji-community-agent"
 readme = "README.md"
-include = ["src/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "config.example.json", "rust-toolchain.toml"]
+include = ["src/**", "Cargo.toml", "Cargo.lock", "README.md", "README.en.md", "LICENSE", "config.example.json", "rust-toolchain.toml"]
 
 [dependencies]
 iquji-agent-wire = { version = "0.1.0", path = "protocol" }
