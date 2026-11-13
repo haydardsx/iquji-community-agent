@@ -692,7 +692,7 @@ dependencies = [
 
 [[package]]
 name = "iquji-agent-wire"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -702,7 +702,7 @@ dependencies = [
 
 [[package]]
 name = "iquji-shared-agent"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agent-client-protocol",
  "async-io",
