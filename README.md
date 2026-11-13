@@ -1,5 +1,7 @@
 # iquji-agent
 
+简体中文 | [English](README.en.md)
+
 通用 Rust Agent 连接工具与库，负责连接和调用本机已授权的外部 Agent。项目包含连接实现和 [protocol 机器合同](protocol/README.md)，不依赖产品后端或其他项目的源码。
 
 本项目按可独立公开的开源项目维护。源码、文档、示例、构建和测试只能依赖本仓内容或任何人均可获取的公开来源；不得依赖仓外工作区路径、未公开源码或凭据。详见[贡献规范](CONTRIBUTING.md)与 [MIT 许可证](LICENSE)。
