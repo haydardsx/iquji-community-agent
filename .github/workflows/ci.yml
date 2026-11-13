@@ -1,0 +1,29 @@
+name: Community Agent CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: 检查格式
+        run: cargo fmt --all -- --check
+      - name: 检查公开合同与进程行为
+        run: cargo test --workspace --locked -- --test-threads=1
+      - name: Clippy
+        run: cargo clippy --workspace --locked --all-targets -- -D warnings
+      - name: 校验两个正式 crate
+        run: python3 scripts/release.py --dry-run

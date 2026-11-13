@@ -1,0 +1,20 @@
+[package]
+name = "iquji-agent-wire"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+publish = ["crates-io"]
+license = "MIT"
+description = "Agent 请求、事件、配置元数据与进程监督的 Rust 机器合同。"
+repository = "https://github.com/haydardsx/iquji-community-agent"
+readme = "README.md"
+include = ["src/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "config.example.json", "rust-toolchain.toml"]
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.10.9"
+url = "=2.5.8"
+
+[lints.rust]
+unsafe_code = "forbid"
