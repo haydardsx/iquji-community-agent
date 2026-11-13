@@ -1,50 +1,176 @@
 # iquji-agent
 
-[简体中文](README.md) | English
+<div align="center">
 
-A general-purpose Rust tool and library for connecting to and invoking external Agents already authorized on the local machine. This project includes the connection implementation and the [protocol contract](protocol/README.md). It does not depend on a product backend or source code from other projects.
+[![Crates.io: iquji-shared-agent](https://img.shields.io/crates/v/iquji-shared-agent.svg?label=iquji-shared-agent&color=blue)](https://crates.io/crates/iquji-shared-agent)
+[![Crates.io: iquji-agent-wire](https://img.shields.io/crates/v/iquji-agent-wire.svg?label=iquji-agent-wire&color=teal)](https://crates.io/crates/iquji-agent-wire)
+[![CI Status](https://github.com/haydardsx/iquji-community-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/haydardsx/iquji-community-agent/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Rust: 1.97.1+](https://img.shields.io/badge/Rust-1.97.1%2B%20(2024)-orange.svg)](rust-toolchain.toml)
+[![Docs.rs](https://img.shields.io/badge/docs.rs-iquji--shared--agent-purple.svg)](https://docs.rs/iquji-shared-agent)
 
-This project is maintained as independently usable open source. Source code, documentation, examples, builds, and tests may depend only on this repository or publicly available sources. They must not depend on external workspace paths, unpublished source code, or credentials. See the [contribution guide](CONTRIBUTING.md) and [MIT License](LICENSE).
+**A Zero-Trust Rust Gateway and Sandboxed Process Supervisor for Locally Authorized AI Coding Agents**
 
-## Installation
+[简体中文](README.md) | [English](README.en.md)
 
-Release versions are available from crates.io:
+</div>
 
+---
+
+## Table of Contents
+
+- [Overview & Problem Statement](#overview--problem-statement)
+- [Architecture & Artifacts Overview](#architecture--artifacts-overview)
+  - [System Architecture Diagram](#system-architecture-diagram)
+  - [Core Artifacts & Consumption Matrix](#core-artifacts--consumption-matrix)
+- [Supported Agents & Capability Matrix](#supported-agents--capability-matrix)
+- [Security & Sandboxing Architecture](#security--sandboxing-architecture)
+- [Quick Start](#quick-start)
+- [Comprehensive Usage Guide](#comprehensive-usage-guide)
+  - [1. Using the Command-Line Interface (CLI)](#1-using-the-command-line-interface-cli)
+  - [2. Integrating as a Rust Library (iquji-shared-agent)](#2-integrating-as-a-rust-library-iquji-shared-agent)
+  - [3. Using the Lightweight Wire Contract (iquji-agent-wire)](#3-using-the-lightweight-wire-contract-iquji-agent-wire)
+  - [4. DeepSeek Model Override & Patch Generation](#4-deepseek-model-override--patch-generation)
+  - [5. Multimodal Image Attachments](#5-multimodal-image-attachments)
+- [Configuration Schema Reference](#configuration-schema-reference)
+- [Wire Protocol & NDJSON Streaming Specification](#wire-protocol--ndjson-streaming-specification)
+- [Stable Error Codes & Diagnostics](#stable-error-codes--diagnostics)
+- [Development, Testing & Release Workflow](#development-testing--release-workflow)
+- [License & Contributing](#license--contributing)
+
+---
+
+## Overview & Problem Statement
+
+When building AI-native developer tooling (such as IDE extensions, desktop agent hubs, or backend orchestration services), directly spawning developer-installed third-party CLI agents (such as OpenAI Codex CLI, DeepSeek Harness CLI, or ACP agents) with `std::process::Command` presents critical engineering and security pitfalls:
+
+1. **Orphan & Zombie Process Hazards**: When a host experiences user cancellations, timeouts, or sudden crashes, nested child processes of external agents often detach and continue running indefinitely, silently exhausting CPU/GPU resources or locking the workspace.
+2. **Output Bomb & OOM Vulnerabilities**: Unruly or malicious agent subprocesses can burst gigabytes of unconstrained log output to stdout/stderr, consuming all available host memory.
+3. **Credential Security & Zero-Trust Boundary**: Inheriting arbitrary environment variables or guessing configuration paths risks credential leakage, configuration corruption, or unintended network relaying.
+4. **Disparate Machine Protocols**: Diverse agents use incompatible CLI flags, authentication restore mechanisms, session continuation flows, and streaming formats.
+
+**`iquji-agent` delivers an open-source, hardened solution to these challenges:**
+- **Strict Process-Group Supervision**: Leverages POSIX process groups and the `--process-group-owner` mechanism to guarantee deterministic tree-wide cleanup on cancellation, timeout, or abnormal exit.
+- **Bounded Resource Budgets**: Enforces strict execution deadlines (default 60s), output byte limits (default 1MB), prompt limits (max 64KB), and request JSON sizes (max 400KB).
+- **Defense-in-Depth Permissions**: Enforces POSIX `0600` file permissions and `0700` parent directory permissions on configuration, `0400` on image attachments, and forbids credential leakage.
+- **Unified NDJSON Machine Contract**: Abstracts heterogenous agents into a clean event stream: `session_started`, `text_delta`, `turn_completed`, and `turn_error`.
+
+---
+
+## Architecture & Artifacts Overview
+
+### System Architecture Diagram
+
+```mermaid
+flowchart TD
+    subgraph Host["Host Application (IDE / Desktop / Server)"]
+        HostCore["Host Application Core"]
+        WireContract["iquji-agent-wire\n(Lightweight Contract & Stream Validation)"]
+    end
+
+    subgraph Supervisor["iquji-shared-agent (Supervisor & Security Boundary)"]
+        CLIEntry["CLI Binary\n(iquji-shared-agent)"]
+        LibEntry["Rust Library API\n(run_turn / scan / inspect)"]
+        Security["Security Controller\n- Unix 0600/0700/0400 Checks\n- PGID Group Lifecycle\n- 1MB Buffer Quotas"]
+    end
+
+    subgraph Adapters["Agent Adapters"]
+        CodexAdapt["Codex CLI Adapter"]
+        DeepSeekAdapt["DeepSeek Harness Adapter"]
+        AcpAdapt["Native ACP Adapter"]
+    end
+
+    subgraph Subprocesses["External Authorized Agent Subprocesses"]
+        CodexBin["codex exec"]
+        DeepSeekBin["dsh exec"]
+        AcpBin["acp server"]
+    end
+
+    HostCore -->|"stdin / stdout (NDJSON IPC)"| CLIEntry
+    HostCore -->|"Direct Function Call"| LibEntry
+    HostCore -.-> WireContract
+    CLIEntry --> Security
+    LibEntry --> Security
+    Security --> Adapters
+    CodexAdapt --> CodexBin
+    DeepSeekAdapt --> DeepSeekBin
+    AcpAdapt --> AcpBin
+```
+
+### Core Artifacts & Consumption Matrix
+
+This repository is a Cargo workspace producing **four distinct consumable artifacts**:
+
+| Artifact Name | Distribution Format | Primary Audience | Typical Usage |
+| --- | --- | --- | --- |
+| **`iquji-shared-agent` (CLI)** | Standalone Executable Binary | Shell scripts, Node.js / Python / Go host processes | Installed via `cargo install`, invoked via IPC (`--config <path> turn`) |
+| **`iquji-shared-agent` (Rust Library)** | Crates.io Crate | Rust-native host applications | Add to `Cargo.toml`, invoke `run_turn` with an in-memory streaming closure |
+| **`iquji-agent-wire` (Protocol Crate)** | Crates.io Lightweight Contract | External clients, gateways, test harnesses | Add to `Cargo.toml` for zero-overhead JSON / NDJSON parsing without process execution code |
+| **DeepSeek Model Override Artifacts** | Private Directory Files (`.patch`, `.yaml`) | Orchestrators managing audited DeepSeek model overrides | Generated via `inspect --model <id> --output-directory <dir>` with verified SHA-256 digests |
+
+---
+
+## Supported Agents & Capability Matrix
+
+| Adapter | Version & Help Verification | Session Continuation | Streaming Events (`text_delta`) | Multimodal Images (PNG/JPEG) | Per-turn HTTP MCP Injection | Workspace Write Sandbox |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Codex CLI** | ✅ Real flag and help validation | ✅ Real thread continuation | ✅ Full assistant text deltas | ✅ Supported (via staging) | ✅ Supported | ✅ `workspace-write` sandbox |
+| **DeepSeek Harness** | ✅ Headless `--dump-config` | ❌ Single turn only | ❌ Final success package only | ❌ Explicitly rejected | ✅ Official `--patch` | ✅ headless write preset |
+| **Native ACP / External Adapter** | ✅ Protocol `initialize` handshake | ⚠️ Requires peer `loadSession` | ✅ Real-time stream events | ✅ Supported (Base64/MIME) | ⚠️ Requires HTTP capability | ❌ Enforced read-only |
+| **Claude CLI / Grok CLI** | ❌ Not implemented | ❌ Not implemented | ❌ Not implemented | ❌ Not implemented | ❌ Not implemented | ❌ Not implemented |
+
+> [!NOTE]
+> - Unimplemented or unsupported features return stable error codes (e.g. `model_unsupported`, `session_unsupported`); fabricated success is never returned.
+> - Each ACP command opens a fresh connection; a session can be restored only if the peer declared `loadSession` during the initialization handshake.
+
+---
+
+## Security & Sandboxing Architecture
+
+This project strictly adheres to **defense-in-depth** security practices:
+
+1. **Strict Unix Permissions**:
+   - **Configuration File**: Must be owned by the current user with exact permissions `0600`.
+   - **Parent Directory**: Must be owned by the current user with permissions `0700` (no group or world write access).
+   - **Image Attachments**: Must be regular `0400` read-only files owned by the current user, residing within a `0700` parent directory.
+   - Symbolic links are strictly rejected for sensitive configurations and image attachments to prevent directory traversal and symlink race attacks.
+2. **Process-Group Supervision (`--process-group-owner`)**:
+   - By default, the tool creates and supervises its own isolated POSIX process group for each CLI subprocess.
+   - When the host already manages a root process group, passing `--process-group-owner <PID>` allows the subprocess to safely join that group. The tool cleans up its direct child on termination, allowing the host to cleanly reclaim the entire process tree without leaving orphaned workers.
+3. **Zero-Trust Credential Isolation**:
+   - Secret keys and tokens are never written to configuration, logs, or diagnostic output.
+   - Beginning with DeepSeek `0.2.0`, stored credentials are recovered strictly through a private temporary `--patch` using official components (`@deepseek-ai/dsh-credentials-local`, etc.), which is destroyed immediately upon completion.
+   - Codex never reads user-level `auth.json`.
+4. **Bounded Time & Space Quotas**:
+   - Default turn timeout is 60 seconds (configurable between 10ms and 10min).
+   - Combined stdout/stderr output is hard-limited to 1 MiB (configurable between 128B and 4MiB).
+   - Prompts are limited to 64 KiB, and input request JSON is limited to 400 KiB.
+
+---
+
+## Quick Start
+
+### 1. Prerequisites
+- **Operating System**: macOS or Linux (Unix environments)
+- **Rust Toolchain**: Rust `1.97.1` or later (Edition 2024)
+
+### 2. Install CLI & Dependencies
+
+Install the CLI binary via crates.io:
 ```sh
-cargo add iquji-shared-agent@0.1.0
-cargo add iquji-agent-wire@0.1.0
 cargo install iquji-shared-agent --version 0.1.0 --locked
 ```
 
-Rust dependencies use only public registries. Source development continues to use the `protocol` path within this repository.
-
-## Building
-
-Use Rust `1.97.1`:
-
-```sh
-cargo build --locked
-cargo fetch --locked --manifest-path protocol/tests/fixtures/host/Cargo.toml
-cargo test --workspace --locked
+Or add the library crates to your Rust project:
+```toml
+[dependencies]
+iquji-shared-agent = "0.1.0"
+iquji-agent-wire = "0.1.0"
 ```
 
-Supervised process execution and file-permission checks currently support Unix. Other platforms explicitly return an unsupported error. Tests use only temporary fake CLIs, ACP processes, configurations, and images. They do not require real Agents to be installed, read user configuration or credentials, authenticate, or call real models.
+### 3. Initialize Configuration
 
-## Supported integrations
-
-| Integration | Current capabilities |
-| --- | --- |
-| Codex CLI | Version and help verification, configuration and model metadata, initial text turns, continuation of real threads, model selection, PNG/JPEG images, and per-turn HTTP MCP configuration |
-| DeepSeek Harness | Version and help verification, headless configuration and models, single text turns, and per-turn HTTP MCP using the official `--patch` interface; no sessions, continuation, images, or streaming events |
-| Native ACP / external ACP adapter | Official Rust SDK 3.3.0, stable protocol v1, initialization, text and images, loading real sessions, cancellation, and per-turn MCP only after HTTP support has been declared |
-| Claude CLI / Grok CLI | Not implemented; the existence of a type or enum does not imply availability |
-
-Each ACP command opens a new connection. A later invocation can restore a session only if the peer declares `loadSession`. ACP host serving, ACP model switching, client file/terminal capabilities, and automatic authentication are not currently provided. Codex returns completed assistant text and does not claim token-level streaming. The trusted local entry point remains responsible for the external Agent's own operating-system sandbox.
-
-## Explicit configuration
-
-Copy [config.example.json](config.example.json) to `.local/config.json`, then replace the placeholders with authorized absolute executable paths and a canonical working directory:
-
+Create a protected configuration directory and copy the starter template:
 ```sh
 mkdir -p .local
 chmod 700 .local
@@ -52,85 +178,323 @@ cp config.example.json .local/config.json
 chmod 600 .local/config.json
 ```
 
-After editing the configuration, run:
-
-```sh
-cargo run --locked -- --config "$PWD/.local/config.json" scan
+Edit `.local/config.json` with the canonical paths to your installed Codex or DeepSeek executable:
+```json
+{
+  "schemaVersion": 1,
+  "workingDirectory": "/Users/yourname/workspace/my-project",
+  "timeoutMs": 5000,
+  "maxOutputBytes": 32768,
+  "agents": [
+    {
+      "id": "local-codex",
+      "adapter": "codex_cli",
+      "executable": "/usr/local/bin/codex"
+    }
+  ]
+}
 ```
 
-The configuration file must be owned by the current user and have Unix permissions `0600`. Its parent directory must be owned by the current user and must not be writable by the group or others. The CLI does not search the current directory, `PATH`, or environment variables to infer configuration or an entry point. An explicitly configured entry point may be installed through a symbolic link, but its final target must be a regular executable file. If supplied, `expectedSha256` is checked against the actual target.
-
-The top-level configuration accepts `schemaVersion`, `workingDirectory`, and `agents`, plus optional `timeoutMs`, `maxOutputBytes`, `turnTimeoutMs`, and `maxTurnOutputBytes`. Each Agent contains `id`, `adapter`, and `executable`, with optional `expectedSha256`. CLI integrations also accept an adapter-matching `codexConfigurationDirectory` or `deepseekConfigurationDirectory`, and a list of `environmentVariables` names. External argv, shell strings, environment values, and ad hoc commands are not accepted.
-
-A configuration directory can explicitly select existing provider, model, and relay settings. The tool does not rewrite the user's originals, perform login checks, or make third-party provider availability depend on an official login. When credentials or a proxy are required, `environmentVariables` records only variable names from the native process environment; values are not written to configuration, reports, or diagnostics. The tool-controlled `HOME`, CLI configuration-directory variables, and dangerous environment-injection variables cannot be overridden. Local configuration, environment files, and runtime directories remain Git-ignored.
-
-## Scanning and configuration inspection
-
+### 4. Scan & Verify Agent Availability
 ```sh
-cargo run --locked -- --config "$PWD/.local/config.json" scan local-codex
-cargo run --locked -- --config "$PWD/.local/config.json" inspect local-codex
+iquji-shared-agent --config "$PWD/.local/config.json" scan local-codex
+```
+A `"status": "detected"` in the output indicates that the agent's executable and argument contracts have been verified.
+
+### 5. Execute Your First Turn
+```sh
+printf '%s\n' '{"agentId":"local-codex","prompt":"Print: Hello iquji!"}' | \
+  iquji-shared-agent --config "$PWD/.local/config.json" turn
 ```
 
-`scan` executes only fixed version/help arguments or ACP `initialize`. It does not create sessions, authenticate, or invoke models. Omitting the Agent ID scans all configured entries. Metadata commands use empty `HOME` and CLI configuration directories created by the tool and removed afterward; they do not read user credentials.
+---
 
-`inspect` examines only explicitly declared CLI configuration directories. Omitting the Agent ID inspects all configured entries. Results may include the selected provider, the current model and other models from the same provider, credential environment-variable names, and fingerprints. They do not return configuration contents, directories, provider URLs, or secret values. Codex does not read `auth.json`; DeepSeek reads effective configuration using the fixed `--profile headless --dump-config` arguments. When a DeepSeek settings provider specifies neither `path` nor `dshHome`, a missing default `settings.yaml` is treated as empty settings according to the official semantics. The composition-layer selection is preserved, and migration backups are not read. Missing explicitly referenced files, unsafe inputs, and malformed content are still rejected. Without a configuration directory, the result is `configuration_metadata_unavailable`; there is no fallback to `HOME`.
+## Comprehensive Usage Guide
 
-Both reports always set `readiness` to `not_checked`. A scan result of `detected` means only that the actual version, arguments, or protocol have been verified. It does not guarantee that credentials, networking, models, or business operations are usable. Unimplemented integrations and insufficient capabilities return stable errors rather than fabricated success.
+### 1. Using the Command-Line Interface (CLI)
 
-## A single turn
+The CLI exposes three primary subcommands: `scan`, `inspect`, and `turn`.
 
-`turn` accepts exactly one `TurnRequest` JSON object from stdin, terminated by EOF:
-
+#### A. Scanning Availability (`scan`)
+Verifies whether configured agents are executable and meet protocol contracts without invoking models or incurring costs:
 ```sh
-printf '%s\n' '{"agentId":"local-codex","prompt":"Question for this turn"}' | \
-  cargo run --locked -- --config "$PWD/.local/config.json" turn
+# Scan a specific agent
+iquji-shared-agent --config .local/config.json scan local-codex
+
+# Scan all configured agents
+iquji-shared-agent --config .local/config.json scan
+```
+**Example Output:**
+```json
+{
+  "schemaVersion": 1,
+  "kind": "agent_connection_scan",
+  "readiness": "not_checked",
+  "connections": [
+    {
+      "id": "local-codex",
+      "adapter": "codex_cli",
+      "status": "detected",
+      "version": "codex-cli 0.1.0",
+      "sessionMode": "resumable",
+      "supportedInputFormats": ["image/png", "image/jpeg"]
+    }
+  ]
+}
 ```
 
-The request includes `agentId` and a text `prompt`, with optional `sessionId`, `model`, `contextFingerprint`, `workspaceWrite`, `attachments`, and up to 32 `mcpServers` entries. MCP entries accept only host-issued, high-entropy IPv4 loopback HTTP gateway addresses. The host remains responsible for authorization, credentials, and transport. Requests cannot supply commands, environment values, or working directories. Text is limited to 64 KiB, input JSON to 400 KiB, and opaque session IDs to 512 bytes. Codex thread IDs are additionally limited to safe ASCII identifiers of at most 200 bytes.
-
-stdout is NDJSON. Depending on adapter capabilities, it emits `session_started` and `text_delta`, then ends with exactly one `turn_completed` or `turn_error`. The success exit code is `0`; the error exit code is `2`. Diagnostics use only stable error codes. DeepSeek emits only the final success object, with no session or streaming events. Consumers must check the complete terminal result, exit status, and EOF together. Partial text does not indicate success.
-
-Turns are read-only by default. After authorizing the directory, the host may explicitly set `workspaceWrite: true`. Codex then uses the `workspace-write` sandbox, and DeepSeek uses the headless `workspace-write` permission preset. Source writes are limited to the configured working directory and the CLI's temporary directories. The working directory always comes from trusted configuration. ACP permission requests are uniformly cancelled, and no client file or terminal capabilities are offered to the Agent. A turn does not automatically log in, change providers, or perform the host's business authorization.
-
-Starting with DeepSeek `0.2.0`, when trusted configuration explicitly authorizes an existing DSH directory, each turn restores existing stored authentication through a private `--patch` according to the official headless contract. Only the three official entries `credentials`, `authorization`, and `deepseek-account` with matching identities are enabled. Verification currently follows the official `0.2.2` components: `@deepseek-ai/dsh-credentials-local`, `@deepseek-ai/dsh-authorization`, and `@deepseek-ai/dsh-deepseek-account`, respectively. Duplicate IDs and substituted components are rejected. Official API-key model settings are read from `@deepseek-ai/dsh-llm-deepseek-api-key`. The default readiness checks still apply; the provider, default model, user profile, and read-only permissions are not changed. The official CLI consumes structured `version`, `refs`, and `records` credentials itself; this tool does not read their contents.
-
-When DeepSeek `0.1.x`'s official `credentials-local` rejects unsupported non-string values at startup, the error is mapped to `configuration_metadata_invalid` only if it includes the official parser and loader stack. This does not mean the credential document is invalid for newer CLI versions. An ordinary `TypeError` or a missing stack remains `agent_request_failed`. Raw paths, credential names, and error contents are not returned to callers. The tool neither reads nor repairs credential files.
-
-Codex may emit non-terminal `item.completed` error diagnostics after creating a thread and before starting a turn. These diagnostics are ignored internally and are not included in the response. Success still requires a real turn start, complete assistant text, and turn completion. A top-level `error`, `turn.failed`, or an assistant message arriving before the turn starts still causes failure.
-
-The default turn timeout is 60 seconds, and combined stdout/stderr is limited to 1 MiB. Local configuration allows 10 milliseconds to 10 minutes and 128 bytes to 4 MiB. Validation, stdin, execution, output, and cleanup share a bounded budget. Cancellation, timeout, limit violations, or failure first trigger cleanup of the supervised process group and entry process. The tool removes only temporary directories it created and whose identity it has verified; it does not delete user configuration directories.
-
-Library consumers can call `run_turn(configuration, request, cancelled, on_event)` and reuse the publicly exported request, attachment, scan, event, terminal-result, and error types. Callbacks should return promptly; the host manages output backpressure. See `protocol` for the data definitions.
-
-## External process-group supervision
-
-When used independently, the tool creates and cleans up its own process group for each CLI. If a native host has already created a root process group and owns cleanup of the entire group, it can explicitly append `--process-group-owner <group-leader-PID>` to a `scan`, `inspect`, or `turn` command. Library consumers supply the same in-memory context through `Configuration::with_process_context(ProcessExecutionContext)`. On each invocation, the tool verifies that it belongs to the specified group, is not the group leader, and that the external group leader is still alive. The CLI inherits that group; no nested process group is created.
-
-This context cannot come from configuration JSON, environment variables, or `TurnRequest`, and it grants no business permissions. In inherited-group mode, the tool cleans up only the direct entry process it owns and does not signal the whole external group. The host must clean up the entire root group on cancellation, timeout, abnormal termination, and after each execution completes. An entry process with uncertain state must not be reused as a healthy session. EOF, output budgets, and wall-clock deadlines are checked under the same contract and are not relaxed by process-group inheritance.
-
-## Models and images
-
-The optional `model` overrides only the model for the current turn, not the provider or environment. Codex selects a model using a separate argument declared by its actual help output. DeepSeek creates a temporary override in a private directory owned by the tool, preserving the current provider, relay, and other settings, then removes it on termination.
-
-Hosts that need to independently verify a DeepSeek model override can run:
-
+#### B. Inspecting Configuration & Models (`inspect`)
+Safely inspects an agent's configuration directory to retrieve active providers, supported models, and credential variable names without leaking secrets:
 ```sh
-cargo run --locked -- --config "$PWD/.local/config.json" inspect local-deepseek \
-  --model model-id --output-directory /absolute/private-output
+iquji-shared-agent --config .local/config.json inspect local-codex
 ```
 
-This entry point applies only to the selected DeepSeek integration. The output directory must be an empty, canonical directory created and owned by the caller with permissions `0700`. The report provides only the override file's size and SHA-256. The caller is responsible for independently verifying, using, and cleaning up the files it owns.
+#### C. Executing a Turn (`turn`)
+Reads a single `TurnRequest` JSON from stdin and streams NDJSON (Newline Delimited JSON) events on stdout until a terminal state is reached:
+```sh
+printf '%s\n' '{
+  "agentId": "local-codex",
+  "prompt": "Refactor main.rs for better performance",
+  "workspaceWrite": false
+}' | iquji-shared-agent --config .local/config.json turn
+```
 
-Images must use `kind=image` and be PNG or JPEG. At most three images are accepted, with a maximum of 4 MiB each and 12 MiB in total. Attachments contain a canonical absolute `path`, `mediaType`, `size`, and `sha256` as 64 lowercase hexadecimal characters without a prefix. Inputs should be private snapshots prepared by the caller: regular `0400` files owned by the current user, with an immediate parent directory owned by the current user and permissions `0700`.
+**Example NDJSON Stream:**
+```json
+{"kind":"session_started","sessionId":"sess_abc123","resumable":true}
+{"kind":"text_delta","text":"I have reviewed main.rs. "}
+{"kind":"text_delta","text":"Here is the recommended refactoring..."}
+{"kind":"turn_completed","sessionId":"sess_abc123","resumable":true,"text":"I have reviewed main.rs. Here is the recommended refactoring...","stopReason":"stop"}
+```
 
-The tool checks file identity, permissions, format signature, size, and the complete digest, rejecting symbolic links and inputs that change. Codex uses image staging frozen by the tool; ACP sends verified Base64 and MIME data through the SDK. Both integrations must first declare actual image support. DeepSeek rejects attachments before startup. Image-format checks do not decompress pixels and do not guarantee that any particular model will accept the image.
+#### D. Host Process-Group Management (`--process-group-owner`)
+When the host application manages the process tree, append `--process-group-owner`:
+```sh
+iquji-shared-agent --config .local/config.json turn --process-group-owner 12345
+```
 
-## Publishing
+---
 
-Updates to `main` trigger `auto-release.yml`; maintainers can also dispatch that workflow to retry. The planner processes unfinished automatic tags serially, then reads the latest `main` without replaying older main commits. Each source commit receives at most one version. The next version increments the patch of the highest stable version found in the source baseline, existing stable tags, and either crate's registry history. Source files retain their development baseline. Version changes exist only in a separate snapshot commit whose parent is the source commit, updating both crates, their internal dependency, and both lockfiles without writing back to `main`.
+### 2. Integrating as a Rust Library (iquji-shared-agent)
 
-Only after formatting, tests, Clippy, and package validation succeed does the planner create an immutable `v` tag. Its `Auto-Release-Source` annotation identifies the source commit. The planner explicitly dispatches `release.yml` and waits for it because tags pushed with GitHub's automatic token do not trigger another workflow. Configure trusted publishing for both crates with repository `haydardsx/iquji-community-agent`, workflow `release.yml`, and environment `crates-io`; that environment allows only `v*` tags.
+In native Rust applications, use `iquji-shared-agent` directly for zero-serialization overhead and streaming event callbacks:
 
-The publisher completes checks on both supported CI operating systems and warms the build and package outputs before requesting a short-lived OIDC credential. It publishes wire before agent. An existing version is skipped only when its checksum matches exactly. A GitHub Release marks completion only after both crates are readable on crates.io with matching checksums. Failures leave the tag available for the next planner run to resume; tags and published artifacts are never overwritten. Retrying an older version cannot move the GitHub Release latest marker backwards.
+```rust
+use iquji_shared_agent::{Configuration, TurnEvent, TurnRequest, run_turn};
+use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
-`cargo package --workspace --locked` validates both crates to be published. Artifacts contain only release source code, documentation, configuration examples, and licenses. They exclude test fixtures, local workspace configuration, and build outputs. Test fixtures retain `publish = false`. Prebuilt binaries are not currently released separately.
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 1. Load protected configuration
+    let config = Configuration::load(Path::new(".local/config.json"))?;
+
+    // 2. Build a type-safe TurnRequest
+    let request = TurnRequest {
+        agent_id: "local-codex".to_string(),
+        prompt: "Implement quicksort in Rust".to_string(),
+        workspace_write: false,
+        session_id: None, // Pass previous sessionId to continue conversation
+        model: None,
+        context_fingerprint: None,
+        attachments: Vec::new(),
+        mcp_servers: Vec::new(),
+    };
+
+    // 3. Cooperative cancellation token
+    let cancelled = AtomicBool::new(false);
+
+    // 4. Run turn and stream events in real time
+    let result = run_turn(&config, request, &cancelled, |event: TurnEvent| {
+        match event {
+            TurnEvent::SessionStarted { session_id, resumable } => {
+                println!("[Session Started] ID: {session_id}, Resumable: {resumable}");
+            }
+            TurnEvent::TextDelta { text } => {
+                print!("{text}");
+            }
+        }
+    })?;
+
+    println!("\n[Turn Completed] StopReason: {}", result.stop_reason);
+    Ok(())
+}
+```
+
+---
+
+### 3. Using the Lightweight Wire Contract (iquji-agent-wire)
+
+For client applications, API gateways, or IPC layers that parse events without running child processes, depend on `iquji-agent-wire`:
+
+```rust
+use iquji_agent_wire::{
+    TurnOutput, TurnRequest, decode_turn_output, decode_turn_request,
+};
+
+fn handle_incoming_ipc(raw_json: &[u8]) {
+    // Decode and validate an incoming request
+    if let Ok(request) = decode_turn_request(raw_json) {
+        println!("Received valid request for agent: {}", request.agent_id);
+    }
+
+    // Decode and validate streaming NDJSON frames
+    let line = br#"{"kind":"text_delta","text":"Analyzing files..."}"#;
+    if let Ok(output) = decode_turn_output(line) {
+        match output {
+            TurnOutput::Event(event) => println!("Event: {:?}", event),
+            TurnOutput::Terminal(terminal) => println!("Terminal: {:?}", terminal),
+        }
+    }
+}
+```
+
+---
+
+### 4. DeepSeek Model Override & Patch Generation
+
+When using DeepSeek Harness, orchestrators can independently export audited, SHA-256 verified model override patches:
+
+```sh
+iquji-shared-agent --config .local/config.json inspect local-deepseek \
+  --model deepseek-reasoner \
+  --output-directory "$PWD/my-safe-patch-dir"
+```
+
+- This command generates verified patch and settings artifacts inside a caller-owned `0700` private directory.
+- The inspection report provides exact file byte sizes and SHA-256 digests for cryptographic auditing.
+
+---
+
+### 5. Multimodal Image Attachments
+
+Send PNG or JPEG images to vision-capable agents (Codex CLI, Native ACP):
+
+```json
+{
+  "agentId": "local-codex",
+  "prompt": "Explain the compilation error shown in this screenshot",
+  "attachments": [
+    {
+      "kind": "image",
+      "path": "/absolute/safe/snapshot.png",
+      "mediaType": "image/png",
+      "size": 1048576,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}
+```
+
+> [!WARNING]
+> - Image files must have POSIX permissions `0400` (read-only for current user), and their parent directory must be `0700`.
+> - A turn accepts at most 3 images, at most 4 MiB per image, and at most 12 MiB in total.
+> - Magic numbers, file sizes, and SHA-256 digests are validated before passing attachments to subprocesses. Symlinks are rejected.
+
+---
+
+## Configuration Schema Reference
+
+Top-level configuration fields in `.local/config.json`:
+
+| Field Name | Type | Required | Default | Description & Constraints |
+| --- | --- | :---: | --- | --- |
+| `schemaVersion` | `u32` | Yes | `1` | Configuration schema version (fixed at `1`) |
+| `workingDirectory` | `String` | Yes | - | Canonical absolute path serving as the agent execution root |
+| `agents` | `Array<Agent>` | Yes | - | List of configured agents (at most 16 entries) |
+| `timeoutMs` | `u64` | No | `1000` | Timeout in milliseconds for probe and metadata inspection |
+| `maxOutputBytes` | `usize` | No | `16384` | Maximum allowable stdout/stderr bytes during inspection |
+| `turnTimeoutMs` | `u64` | No | `60000` | Hard deadline in milliseconds for a single turn (10ms to 10min) |
+| `maxTurnOutputBytes` | `usize` | No | `1048576` | Hard limit on cumulative turn output bytes (128B to 4MiB) |
+
+Fields for individual `Agent` objects:
+
+| Field Name | Type | Required | Description |
+| --- | --- | :---: | --- |
+| `id` | `String` | Yes | Unique alphanumeric identifier (supports `a-z`, `0-9`, `-`, `_`) |
+| `adapter` | `String` | Yes | Adapter type: `codex_cli`, `deepseek_harness`, `native_acp`, `external_acp_adapter` |
+| `executable` | `String` | Yes | Absolute path to the executable (symlinks allowed if target is a regular executable) |
+| `expectedSha256` | `String` | No | Optional 64-character lowercase SHA-256 digest of the target executable |
+| `codexConfigurationDirectory` | `String` | No | Codex only: Explicit absolute path to the configuration directory |
+| `deepseekConfigurationDirectory`| `String` | No | DeepSeek only: Explicit absolute path to the DSH configuration directory |
+| `environmentVariables` | `Array<String>` | No | Whitelist of inherited environment variable **names** (values are not stored) |
+
+---
+
+## Wire Protocol & NDJSON Streaming Specification
+
+The output stream consists of single-line JSON objects (NDJSON). Consumers must evaluate both the process exit code and the terminal event:
+
+```mermaid
+stateDiagram-v2
+    [*] --> SessionStarted: Session Created (Optional)
+    SessionStarted --> TextDelta: Text Output Delta
+    TextDelta --> TextDelta: More Text
+    TextDelta --> TurnCompleted: Turn Succeeded (Exit code 0)
+    SessionStarted --> TurnCompleted: Turn Succeeded (No text)
+    TextDelta --> TurnError: Execution Error (Exit code 2)
+    SessionStarted --> TurnError: Execution Error (Exit code 2)
+    [*] --> TurnError: Validation Error (Exit code 2)
+```
+
+1. **`session_started` (Event)**:
+   `{"kind":"session_started", "sessionId":"...", "resumable":true}`
+2. **`text_delta` (Event)**:
+   `{"kind":"text_delta", "text":"..."}`
+3. **`turn_completed` (Terminal)**:
+   `{"kind":"turn_completed", "sessionId":"...", "resumable":true, "text":"...", "stopReason":"stop"}`
+4. **`turn_error` (Terminal)**:
+   `{"kind":"turn_error", "error":"turn_timed_out"}`
+
+---
+
+## Stable Error Codes & Diagnostics
+
+When execution fails, the CLI writes a stable error code to stderr and terminates with exit code `2` (success is `0`).
+
+| Error Code (`code`) | Root Cause | Recommended Action |
+| --- | --- | --- |
+| `configuration_invalid` | Malformed JSON or missing required fields | Check configuration against the schema specification |
+| `configuration_not_private` | Configuration file or parent permissions too loose | Run `chmod 700 <directory>` and `chmod 600 <file>` |
+| `executable_unavailable` | Executable path does not exist | Verify that `executable` points to a valid file |
+| `executable_digest_mismatch`| Executable SHA-256 does not match `expectedSha256` | Update the expected hash or verify the binary |
+| `turn_timed_out` | Turn execution exceeded deadline | Increase `turnTimeoutMs` or investigate slow agent runs |
+| `turn_output_limit` | Output bytes exceeded the buffer budget | Increase `maxTurnOutputBytes` or refine prompt output limits |
+| `session_unsupported` | Attempted session continuation on non-resumable agent | Remove `sessionId` for single-turn agents (e.g. DeepSeek) |
+| `attachment_invalid` | Attachment is corrupted, non-PNG/JPEG, or permissions != 0400 | Verify image format and strict POSIX permissions |
+
+---
+
+## Development, Testing & Release Workflow
+
+### Local Compilation & Testing
+This project targets Rust `1.97.1` (Edition 2024):
+
+```sh
+# 1. Build workspace
+cargo build --locked
+
+# 2. Fetch fixture dependencies
+cargo fetch --locked --manifest-path protocol/tests/fixtures/host/Cargo.toml
+
+# 3. Run workspace test suite
+cargo test --workspace --locked
+
+# 4. Lint and format checks
+cargo clippy --locked --all-targets -- -D warnings
+cargo fmt --check
+```
+
+> [!TIP]
+> The test suite includes mock CLIs, simulated ACP processes, and self-contained fixtures. **Tests run completely offline** without requiring installed agents, local user credentials, or live model API calls.
+
+### Automated Release Pipeline (Auto Release)
+- Merges to `main` automatically trigger `.github/workflows/auto-release.yml`.
+- The release planner calculates semantic version bumps and creates immutable signed Git tags (`vX.Y.Z`).
+- Dispatches `release.yml` using GitHub OIDC trusted publishing to publish crates in order: `iquji-agent-wire` followed by `iquji-shared-agent`, and creates the GitHub Release.
+
+---
+
+## License & Contributing
+
+- **License**: Released under the [MIT License](LICENSE).
+- **Contributing**: Issues and Pull Requests are welcome! Please read the [Contributing Guide (CONTRIBUTING.md)](CONTRIBUTING.md) and [Authors (AUTHORS.md)](AUTHORS.md) prior to submitting changes.

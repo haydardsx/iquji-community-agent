@@ -8,7 +8,7 @@ license = "MIT"
 description = "Agent 请求、事件、配置元数据与进程监督的 Rust 机器合同。"
 repository = "https://github.com/haydardsx/iquji-community-agent"
 readme = "README.md"
-include = ["src/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "config.example.json", "rust-toolchain.toml"]
+include = ["src/**", "Cargo.toml", "Cargo.lock", "README.md", "README.en.md", "LICENSE", "config.example.json", "rust-toolchain.toml"]
 
 [dependencies]
 serde = { version = "=1.0.229", features = ["derive"] }
