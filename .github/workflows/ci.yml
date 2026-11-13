@@ -12,6 +12,7 @@ permissions:
 jobs:
   check:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -21,6 +22,8 @@ jobs:
           persist-credentials: false
       - name: 检查格式
         run: cargo fmt --all -- --check
+      - name: 准备独立宿主的锁定依赖
+        run: cargo fetch --locked --manifest-path protocol/tests/fixtures/host/Cargo.toml
       - name: 检查公开合同与进程行为
         run: cargo test --workspace --locked -- --test-threads=1
       - name: Clippy

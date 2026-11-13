@@ -22,7 +22,8 @@ Rust 依赖只使用公开注册表；源码开发仍使用本仓 protocol 路�
 
 ```sh
 cargo build --locked
-cargo test --locked
+cargo fetch --locked --manifest-path protocol/tests/fixtures/host/Cargo.toml
+cargo test --workspace --locked
 ```
 
 当前受监管进程与文件权限检查支持 Unix；其他平台明确返回不支持。测试只使用临时假 CLI、ACP 进程、配置和图片，不要求安装实际 Agent，不读取用户配置或凭据，不调用认证或真实模型。
