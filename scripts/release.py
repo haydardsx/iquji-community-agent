@@ -60,6 +60,9 @@ def main():
                 content = archive.extractfile(member).read().decode("utf-8", errors="replace")
                 if re.search(r"/(?:Users|home)/[A-Za-z0-9_.-]+/|[A-Z]:\\Users\\|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", content):
                     raise RuntimeError(f"制品包含本机信息或私密内容：{relative}")
+        if dry_run:
+            print(f"本地制品检查通过，尚未发布：{name}@{version}")
+            continue
         checksum = hashlib.sha256(artifact.read_bytes()).hexdigest()
         published = registry_version(name, version)
         if published:
@@ -69,10 +72,7 @@ def main():
         else:
             releases.append((directory, name, version))
     for directory, name, version in releases:
-        if dry_run:
-            print(f"打包与注册表检查通过，尚未发布：{name}@{version}")
-        else:
-            run("cargo", "publish", "--locked", "--manifest-path", str(directory / "Cargo.toml"))
+        run("cargo", "publish", "--locked", "--manifest-path", str(directory / "Cargo.toml"))
 
 
 if __name__ == "__main__":
