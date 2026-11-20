@@ -1,0 +1,110 @@
+name: Verify candidate
+run-name: Verify candidate
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Review record revision
+        required: true
+        type: string
+permissions: {}
+concurrency:
+  group: promotion-${{ github.repository_id }}
+  cancel-in-progress: false
+env:
+  CONTROL_REVISION: ${{ vars.VERIFIED_CONTROL_REVISION || '15225a45d4746d2b5dd6e58fde62fc7406fa9b91' }}
+jobs:
+  test:
+    if: &authorized >-
+      github.ref == 'refs/heads/main' && github.ref_protected &&
+      github.actor == 'haydardsx' && github.triggering_actor == 'haydardsx' &&
+      github.event.repository.private == false &&
+      (github.repository == 'haydardsx/iquji-community-web' ||
+       github.repository == 'haydardsx/iquji-community-agent' ||
+       github.repository == 'haydardsx/demo_deploy_frontend' ||
+       github.repository == 'haydardsx/demo_deploy_backend')
+    runs-on: ubuntu-24.04
+    environment: candidate-verification
+    timeout-minutes: 60
+    steps:
+      - &reader
+        id: reader
+        name: Open review materials
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.MATERIAL_APP_ID }}
+          private-key: ${{ secrets.MATERIAL_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
+      - &control
+        name: Load verification tools
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+          CONTROL_REPO: ${{ secrets.CONTROL_REPOSITORY }}
+          INTAKE_REPO: ${{ secrets.INTAKE_REPOSITORY }}
+          SIGNED_REVISION: ${{ vars.VERIFIED_CONTROL_REVISION }}
+          REVISION_SIGNATURE: ${{ vars.CONTROL_REVISION_SIGNATURE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$CONTROL_REVISION" =~ ^[0-9a-f]{40}$ && "$CONTROL_REPO" =~ ^haydardsx/[a-zA-Z0-9_.-]+$ ]]
+          [[ "$INTAKE_REPO" != "$CONTROL_REPO" && "$INTAKE_REPO" =~ ^haydardsx/[a-zA-Z0-9_.-]+$ ]]
+          if [[ -n "$SIGNED_REVISION" ]]; then
+            [[ "$SIGNED_REVISION" == "$CONTROL_REVISION" ]]
+            printf '%s\n' 'community-review namespaces="iquji-community-control-v1" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ8hRz2GqVRt+bGiRQtTPB/1S0uiWyoriYkf577/tlKa' > "$RUNNER_TEMP/control-signers"
+            printf '%s' "$REVISION_SIGNATURE" | base64 --decode > "$RUNNER_TEMP/control.sig"
+            printf '%s' "$CONTROL_REVISION" | ssh-keygen -Y verify -f "$RUNNER_TEMP/control-signers" -I community-review -n iquji-community-control-v1 -s "$RUNNER_TEMP/control.sig" >/dev/null 2>&1
+          fi
+          gh api installation/repositories 2>/dev/null | jq -e --arg control "$CONTROL_REPO" --arg intake "$INTAKE_REPO" '
+            .total_count == 2 and (.repositories | all(.private)) and
+            ([.repositories[].full_name] | sort) == ([$control, $intake] | sort)
+          ' >/dev/null
+          git init -q "$RUNNER_TEMP/control"
+          git -C "$RUNNER_TEMP/control" -c credential.helper= -c 'credential.helper=!gh auth git-credential' fetch -q --no-tags --depth=1 "https://github.com/$CONTROL_REPO.git" "$CONTROL_REVISION" >/dev/null 2>&1
+          [[ "$(git -C "$RUNNER_TEMP/control" rev-parse FETCH_HEAD)" == "$CONTROL_REVISION" ]]
+          git -C "$RUNNER_TEMP/control" -c core.hooksPath=/dev/null checkout -q --detach "$CONTROL_REVISION" >/dev/null 2>&1
+      - &verify
+        name: Verify review record
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+          INTAKE_REPO: ${{ secrets.INTAKE_REPOSITORY }}
+        run: |
+          python3 "$RUNNER_TEMP/control/gates/public_job.py" verify >/dev/null 2>&1 || { echo 'Candidate verification failed.'; exit 1; }
+      - name: Load verified toolchain
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+          CONTROL_REPO: ${{ secrets.CONTROL_REPOSITORY }}
+        run: |
+          python3 "$RUNNER_TEMP/control/gates/public_job.py" toolchain >/dev/null 2>&1 || { echo 'Toolchain verification failed.'; exit 1; }
+      - name: Test verified commits
+        shell: bash
+        run: |
+          python3 "$RUNNER_TEMP/control/gates/public_job.py" test >/dev/null 2>&1 || { echo 'Candidate tests failed.'; exit 1; }
+  promote:
+    if: *authorized
+    needs: test
+    runs-on: ubuntu-24.04
+    environment: candidate-promotion
+    timeout-minutes: 20
+    steps:
+      - *reader
+      - *control
+      - *verify
+      - id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.PROMOTION_APP_ID }}
+          private-key: ${{ secrets.PROMOTION_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+      - name: Promote verified commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_ID: ${{ vars.PROMOTION_APP_ID }}
+          RULES_SIGNATURE: ${{ vars.RULES_SIGNATURE }}
+        run: |
+          python3 "$RUNNER_TEMP/control/gates/public_job.py" promote >/dev/null 2>&1 || { echo 'Promotion failed.'; exit 1; }
