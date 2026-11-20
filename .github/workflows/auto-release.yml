@@ -1,0 +1,30 @@
+name: Community Agent automatic release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: agent-release-planner
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  plan:
+    if: github.event.repository.private == false && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: 串行续传未完成版本并发布最新主线
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/auto_release.py plan

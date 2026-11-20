@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "workingDirectory": "/absolute/workspace",
+  "timeoutMs": 1000,
+  "maxOutputBytes": 16384,
+  "agents": [{
+    "id": "local-codex",
+    "adapter": "codex_cli",
+    "executable": "/absolute/bin/codex"
+  }]
+}

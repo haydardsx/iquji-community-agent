@@ -1,0 +1,74 @@
+name: Community Agent CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  merge_group:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: 检查拉取请求标题
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          title = os.environ["PR_TITLE"]
+          pattern = r"(?:feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(?:\((?P<scope>[a-z0-9-]+)\))?!?: (?P<summary>\S[^\r\n]*)"
+          match = re.fullmatch(pattern, title)
+          scopes = "agent cli wire protocol config runtime docs deps release ci test build".split()
+          placeholders = {"update", "fix", "wip", "tmp", "test", "change", "updates", "changes", "todo", "修改", "更新", "测试", "修复"}
+          if not match or not title.isprintable() or len(title) > 100 or (match["scope"] and match["scope"] not in scopes):
+              raise SystemExit("Use a Conventional Commit title with a supported scope.")
+          summary = match["summary"]
+          words = "".join(ch for ch in summary.casefold() if ch.isalnum())
+          if summary != summary.strip() or sum(ch.isalnum() for ch in summary) < 2 or words in placeholders:
+              raise SystemExit("Describe the change in the pull request title.")
+          PY
+      - name: 检查源码、测试和制品
+        shell: bash
+        env:
+          SOURCE: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+        run: |
+          bash -euo pipefail > /dev/null 2>&1 <<'CHECK' || { echo 'Source, test or package verification failed.'; exit 1; }
+          if [[ "$GITHUB_EVENT_NAME" == "merge_group" ]]; then
+            python3 .github/scripts/community_guard.py --repo . --tree HEAD --contents-only
+          else
+            python3 .github/scripts/community_guard.py --repo . --tree "$SOURCE" --history
+            python3 .github/scripts/community_guard.py --repo . --tree HEAD --contents-only
+          fi
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+          cargo fmt --all -- --check
+          cargo fetch --locked --manifest-path protocol/tests/fixtures/host/Cargo.toml
+          cargo test --workspace --locked -- --test-threads=1
+          cargo clippy --workspace --locked --all-targets -- -D warnings
+          python3 scripts/release.py --dry-run
+          CHECK
+  result:
+    name: community-ci
+    if: always()
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - name: 核对所有平台的结果
+        env:
+          RESULT: ${{ needs.check.result }}
+        run: test "$RESULT" = success

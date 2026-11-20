@@ -1,0 +1,11 @@
+target/
+.local/
+.env
+.env.*
+!.env.example
+*.local.json
+.DS_Store
+
+.cache/
+__pycache__/
+*.pyc
