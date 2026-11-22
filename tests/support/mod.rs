@@ -111,21 +111,19 @@ impl Fixture {
         serde_json::from_slice(&output.stdout).unwrap()
     }
 
-    pub fn assert_error(&self, expected: &str) {
-        if expected == "probe_timed_out" {
-            let output = self.command().output().unwrap();
-            if output.status.code() == Some(2) {
-                // 整体期限已耗尽时不能为序列化报告另开预算，只交付稳定诊断。
-                assert!(output.stdout.is_empty());
-                assert_eq!(output.stderr, b"probe_timed_out\n");
-            } else {
-                assert!(output.status.success());
-                let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-                assert_eq!(report["connections"][0]["error"], expected);
-            }
-            return;
+    pub fn assert_error(&self, expected: &str) -> Output {
+        let output = self.command().output().unwrap();
+        if expected == "probe_timed_out" && output.status.code() == Some(2) {
+            // 整体期限已耗尽时不能为序列化报告另开预算，只交付稳定诊断。
+            assert!(output.stdout.is_empty());
+            assert_eq!(output.stderr, b"probe_timed_out\n");
+        } else {
+            assert!(output.status.success());
+            assert!(output.stderr.is_empty());
+            let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(report["connections"][0]["error"], expected);
         }
-        assert_eq!(self.report()["connections"][0]["error"], expected);
+        output
     }
 
     pub fn assert_configuration_error(&self, output: Output, expected: &str) {
