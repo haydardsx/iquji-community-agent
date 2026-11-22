@@ -24,6 +24,9 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Verify pull request commit identities
+        if: github.event_name == 'pull_request'
+        run: python3 .github/scripts/check_maintainer.py
       - name: 检查拉取请求标题
         if: github.event_name == 'pull_request'
         env:
