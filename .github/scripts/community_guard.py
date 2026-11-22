@@ -45,8 +45,8 @@ def check(repo, head, history, contents_only=False):
         revision = raw_revision.decode()
         if not contents_only:
             author, committer, message = git(repo, "show", "-s", "--format=%ae%x00%ce%x00%B", revision).decode().split("\0", 2)
-            if not author.endswith("@users.noreply.github.com") or not (
-                committer.endswith("@users.noreply.github.com") or committer == "noreply@github.com"
+            if not (author == "community@iqu.lol" or author.endswith("@users.noreply.github.com")) or not (
+                committer in {"community@iqu.lol", "noreply@github.com"} or committer.endswith("@users.noreply.github.com")
             ):
                 findings.append((revision[:12], "commit-identity"))
             findings.extend(check_text(revision[:12], message))
