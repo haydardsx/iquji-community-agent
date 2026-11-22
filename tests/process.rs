@@ -170,22 +170,34 @@ fn 超时会终止并回收实际子进程且不输出诊断正文() {
     let _serial = process_test();
     let fixture = Fixture::new();
     let pid = fixture.root.join("pid");
+    let marker = "fixture-stderr-marker";
     fixture.script(&format!(
-        "echo $$ > {}; printf 'secret raw stderr' >&2; /bin/sleep 30",
+        "echo $$ > {}; printf '%s' '{marker}' >&2; exec /bin/sleep 30",
         quote(&pid)
     ));
     let mut config = fixture.document();
-    config["timeoutMs"] = json!(50);
+    // 探测期限包含可执行文件检查与启动，给子进程足够时间记录自己的 PID。
+    let timeout = Duration::from_secs(1);
+    config["timeoutMs"] = json!(timeout.as_millis());
     fixture.save(config);
     let started = Instant::now();
-    fixture.assert_error("probe_timed_out");
-    assert!(started.elapsed() < Duration::from_secs(3));
+    let output = fixture.assert_error("probe_timed_out");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= timeout && elapsed < Duration::from_secs(3),
+        "{elapsed:?}"
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(marker));
     let pid: i32 = std::fs::read_to_string(pid)
         .unwrap()
         .trim()
         .parse()
         .unwrap();
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
 }
 
 #[test]
