@@ -12,7 +12,7 @@ concurrency:
   group: promotion-${{ github.repository_id }}
   cancel-in-progress: false
 env:
-  CONTROL_REVISION: ${{ vars.VERIFIED_CONTROL_REVISION || '15225a45d4746d2b5dd6e58fde62fc7406fa9b91' }}
+  CONTROL_REVISION: ${{ vars.VERIFIED_CONTROL_REVISION }}
 jobs:
   test:
     if: &authorized >-
@@ -43,19 +43,16 @@ jobs:
           GH_TOKEN: ${{ steps.reader.outputs.token }}
           CONTROL_REPO: ${{ secrets.CONTROL_REPOSITORY }}
           INTAKE_REPO: ${{ secrets.INTAKE_REPOSITORY }}
-          SIGNED_REVISION: ${{ vars.VERIFIED_CONTROL_REVISION }}
           REVISION_SIGNATURE: ${{ vars.CONTROL_REVISION_SIGNATURE }}
         run: |
           set -euo pipefail
           umask 077
           [[ "$CONTROL_REVISION" =~ ^[0-9a-f]{40}$ && "$CONTROL_REPO" =~ ^haydardsx/[a-zA-Z0-9_.-]+$ ]]
           [[ "$INTAKE_REPO" != "$CONTROL_REPO" && "$INTAKE_REPO" =~ ^haydardsx/[a-zA-Z0-9_.-]+$ ]]
-          if [[ -n "$SIGNED_REVISION" ]]; then
-            [[ "$SIGNED_REVISION" == "$CONTROL_REVISION" ]]
-            printf '%s\n' 'community-review namespaces="iquji-community-control-v1" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ8hRz2GqVRt+bGiRQtTPB/1S0uiWyoriYkf577/tlKa' > "$RUNNER_TEMP/control-signers"
-            printf '%s' "$REVISION_SIGNATURE" | base64 --decode > "$RUNNER_TEMP/control.sig"
-            printf '%s' "$CONTROL_REVISION" | ssh-keygen -Y verify -f "$RUNNER_TEMP/control-signers" -I community-review -n iquji-community-control-v1 -s "$RUNNER_TEMP/control.sig" >/dev/null 2>&1
-          fi
+          [[ -n "$REVISION_SIGNATURE" ]]
+          printf '%s\n' 'community-review namespaces="iquji-community-control-v1" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ8hRz2GqVRt+bGiRQtTPB/1S0uiWyoriYkf577/tlKa' > "$RUNNER_TEMP/control-signers"
+          printf '%s' "$REVISION_SIGNATURE" | base64 --decode > "$RUNNER_TEMP/control.sig"
+          printf '%s' "$CONTROL_REVISION" | ssh-keygen -Y verify -f "$RUNNER_TEMP/control-signers" -I community-review -n iquji-community-control-v1 -s "$RUNNER_TEMP/control.sig" >/dev/null 2>&1
           gh api installation/repositories 2>/dev/null | jq -e --arg control "$CONTROL_REPO" --arg intake "$INTAKE_REPO" '
             .total_count == 2 and (.repositories | all(.private)) and
             ([.repositories[].full_name] | sort) == ([$control, $intake] | sort)
