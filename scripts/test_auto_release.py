@@ -40,21 +40,17 @@ class ReleaseTagTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 auto_release.verify()
 
-    def test_plan_first_release_and_retry_use_same_commit(self):
+    def test_plan_requests_protected_tag(self):
         self.git("tag", "-d", "v0.2.0")
-        execute = auto_release.run
-        commands = []
-        def observe(*args):
-            if args[0] == "gh" or "push" in args:
-                commands.append(args)
-                return ""
-            return execute(*args)
+        with patch.dict(os.environ, {"GITHUB_REF": "refs/heads/main"}), \
+                patch.object(auto_release, "published_tags") as published:
+            self.assertEqual(auto_release.plan(), ("create", "v0.2.0"))
+            published.assert_not_called()
+        self.assertEqual(self.git("tag", "--list").stdout, b"")
+
+    def test_plan_resumes_existing_tag_until_release_is_complete(self):
         with patch.dict(os.environ, {"GITHUB_REF": "refs/heads/main"}):
-            with patch.object(auto_release, "published_tags", return_value=[]), patch.object(auto_release, "run", observe):
-                auto_release.plan()
-                auto_release.plan()
-            with patch.object(auto_release, "published_tags", return_value=["v0.2.0"]), patch.object(auto_release, "run", observe):
-                auto_release.plan()
-        self.assertEqual(len([cmd for cmd in commands if "push" in cmd]), 1)
-        self.assertEqual(len([cmd for cmd in commands if cmd[:2] == ("gh", "workflow")]), 2)
-        self.assertEqual(execute("git", "rev-parse", "v0.2.0"), execute("git", "rev-parse", "HEAD"))
+            with patch.object(auto_release, "published_tags", return_value=[]):
+                self.assertEqual(auto_release.plan(), ("resume", "v0.2.0"))
+            with patch.object(auto_release, "published_tags", return_value=["v0.2.0"]):
+                self.assertEqual(auto_release.plan(), ("complete", "v0.2.0"))
