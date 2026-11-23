@@ -1,4 +1,4 @@
-"""从已合并的版本提交生成不可变标签，并支持续发。"""
+"""检查已合并的版本标签并续传未完成的发布。"""
 import argparse
 import os
 from pathlib import Path
@@ -37,16 +37,11 @@ def plan():
     if os.environ.get("GITHUB_REF") != "refs/heads/main":
         raise ValueError("发布入口需要 main。")
     head, tag = checked_tag()
-    if run("git", "tag", "--list", tag):
-        old = run("git", "rev-parse", tag + "^{commit}")
-        run("git", "merge-base", "--is-ancestor", old, head)
-    else:
-        run("git", "tag", tag, head)
-        run("git", "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential",
-            "push", "origin", "refs/tags/" + tag)
-    # 已完成的版本跳过；中断的上传仍使用原标签及其相同源码。
-    if tag not in published_tags():
-        run("gh", "workflow", "run", "release.yml", "--repo", REPOSITORY, "--ref", tag, "-f", "operation=publish")
+    if not run("git", "tag", "--list", tag):
+        return "create", tag
+    tagged = run("git", "rev-parse", tag + "^{commit}")
+    run("git", "merge-base", "--is-ancestor", tagged, head)
+    return ("complete" if tag in published_tags() else "resume"), tag
 
 
 def complete():
@@ -65,4 +60,9 @@ if __name__ == "__main__":
     operation = parser.parse_args().operation
     if os.environ.get("GITHUB_REPOSITORY") != REPOSITORY:
         parser.error("发布仓库与包清单不一致。")
-    actions[operation]()
+    if operation == "plan":
+        action, tag = plan()
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+            print(f"action={action}", f"tag={tag}", sep="\n", file=output)
+    else:
+        actions[operation]()

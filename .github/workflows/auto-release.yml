@@ -6,8 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  actions: write
+  contents: read
 
 concurrency:
   group: agent-release-planner
@@ -16,15 +15,102 @@ concurrency:
 
 jobs:
   plan:
-    if: github.event.repository.private == false && github.ref == 'refs/heads/main'
+    if: >-
+      github.repository == 'haydardsx/iquji-community-agent' && !github.event.repository.private &&
+      github.ref == 'refs/heads/main' && github.ref_protected
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 10
+    outputs:
+      action: ${{ steps.plan.outputs.action }}
+      tag: ${{ steps.plan.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: 串行续传未完成版本并发布最新主线
+      - id: plan
+        name: 核对两个 crate 的版本及现有发布
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/auto_release.py plan
+
+  check:
+    needs: plan
+    if: needs.plan.outputs.action == 'create'
+    uses: ./.github/workflows/ci.yml
+
+  tag:
+    needs: [plan, check]
+    if: needs.plan.outputs.action == 'create'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: candidate-promotion
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - name: 核对已合并提交和清单中的发布版本
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api="repos/$GITHUB_REPOSITORY"
+          gh api "$api/commits/$GITHUB_SHA/pulls" | jq -e --arg head "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" '
+            any(.[]; .merged_at != null and .merge_commit_sha == $head and
+                .base.ref == "main" and .base.repo.full_name == $repo)' >/dev/null
+          for manifest in Cargo.toml protocol/Cargo.toml; do
+            gh api -H 'Accept: application/vnd.github.raw+json' "$api/contents/$manifest?ref=$GITHUB_SHA" > "$RUNNER_TEMP/${manifest//\//-}"
+          done
+          python3 - <<'PY'
+          import os, pathlib, re, tomllib
+          directory = pathlib.Path(os.environ["RUNNER_TEMP"])
+          agent, wire = [tomllib.loads((directory / name).read_text()) for name in ("Cargo.toml", "protocol-Cargo.toml")]
+          version = agent["package"]["version"]
+          if not (re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version)
+                  and agent["package"]["name"] == "iquji-community-agent"
+                  and wire["package"]["name"] == "iquji-community-agent-wire"
+                  and version == wire["package"]["version"] == agent["dependencies"]["iquji-community-agent-wire"]["version"]
+                  and os.environ["TAG"] == "v" + version):
+              raise SystemExit("Release version does not match the merged manifests.")
+          PY
+      - id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.PROMOTION_APP_ID }}
+          private-key: ${{ secrets.PROMOTION_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: iquji-community-agent
+          permission-contents: write
+      - name: 创建并回读受保护的版本标签
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          api="repos/$GITHUB_REPOSITORY"
+          gh api installation/repositories | jq -e --arg repo "$GITHUB_REPOSITORY" '
+            .total_count == 1 and .repositories[0].full_name == $repo' >/dev/null
+          gh api "$api/branches/main" | jq -e --arg head "$GITHUB_SHA" '.protected and .commit.sha == $head' >/dev/null
+          ref="refs/tags/$TAG"
+          if ! gh api -X POST "$api/git/refs" -f ref="$ref" -f sha="$GITHUB_SHA" >/dev/null; then
+            echo "Checking whether the requested tag was already created."
+          fi
+          gh api "$api/git/ref/tags/$TAG" | jq -e --arg ref "$ref" --arg head "$GITHUB_SHA" '
+            .ref == $ref and .object.type == "commit" and .object.sha == $head' >/dev/null
+
+  resume:
+    needs: plan
+    if: needs.plan.outputs.action == 'resume'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: 从原标签继续未完成的发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG" -f operation=publish
