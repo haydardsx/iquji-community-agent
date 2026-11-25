@@ -18,3 +18,15 @@ iquji-shared-agent --config "$PWD/agents.json" scan
 只需读写协议消息时，可使用 [iquji-community-agent-wire](protocol/README.zh-CN.md)。
 
 使用 Rust 1.97.1 运行 `cargo test --workspace --locked`。本项目以 [MIT 许可证](LICENSE)发布。
+
+## 参与贡献
+
+从最新的 `origin/main` 建立用途分支，例如 `feat/agent-discovery`。分支名由 Conventional Commits 类型、`/` 和主题组成。主题使用小写英文字母及数字，单词之间使用一个连字符，分支名总长至多 64 个字符。
+
+```sh
+python3 scripts/check_staged.py --install
+```
+
+暂存本次要提交的改动后执行提交。钩子会在临时检出中对暂存快照运行本仓 CI 命令。也可在提交前直接运行 `python3 scripts/check_staged.py`。已有钩子时，在 `pre-commit` 接入该命令，并在 `commit-msg` 接入 `python3 .github/scripts/check_subjects.py --commit-message "$1"`。
+
+提交和拉取请求的标题使用 `类型(scope): 具体改动`。可用范围为 `agent`、`cli`、`wire`、`protocol`、`config`、`runtime`、`docs`、`deps`、`release`、`ci`、`test` 和 `build`。送审提交的作者和提交者使用正式维护身份 `IQuji Community <community@iqu.lol>`。向 `main` 提交拉取请求并等待必需检查通过。
