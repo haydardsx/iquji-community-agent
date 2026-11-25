@@ -27,6 +27,6 @@ iquji-shared-agent --config "$PWD/agents.json" scan
 python3 scripts/check_staged.py --install
 ```
 
-暂存本次要提交的改动后执行提交。钩子会在临时检出中对暂存快照运行本仓 CI 命令。也可在提交前直接运行 `python3 scripts/check_staged.py`。已有钩子时，在 `pre-commit` 接入该命令，并在 `commit-msg` 接入 `python3 .github/scripts/check_subjects.py --commit-message "$1"`。
+暂存本次要提交的改动后执行提交。钩子会在临时检出中对暂存快照运行本仓 CI 命令，并在当前系统打包和检查两个 crate。GitHub Actions 在 Linux 上执行相同的制品检查。也可在提交前直接运行 `python3 scripts/check_staged.py`。已有钩子时，在 `pre-commit` 接入该命令，并在 `commit-msg` 接入 `python3 .github/scripts/check_subjects.py --commit-message "$1"`。
 
 提交和拉取请求的标题使用 Conventional Commits 格式，例如 `feat(agent): improve agent discovery`。可用范围为 `agent`、`cli`、`wire`、`protocol`、`config`、`runtime`、`docs`、`deps`、`release`、`ci`、`test` 和 `build`。送审提交的作者和提交者使用正式维护身份 `IQuji Community <community@iqu.lol>`。向 `main` 提交拉取请求并等待必需检查通过。

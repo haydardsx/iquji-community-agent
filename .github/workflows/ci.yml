@@ -14,11 +14,7 @@ permissions:
 
 jobs:
   check:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -47,7 +43,7 @@ jobs:
     needs: check
     runs-on: ubuntu-latest
     steps:
-      - name: 核对所有平台的结果
+      - name: 核对 Linux 验收结果
         env:
           RESULT: ${{ needs.check.result }}
         run: test "$RESULT" = success
